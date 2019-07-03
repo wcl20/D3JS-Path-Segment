@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang = "en">
+<head>
+    <style>
+        body { margin: 0; }
+        svg { width: 100vw; height: 100vh;}
+    </style>
+</head>
+<body>
+    <svg></svg>
+    <script src="js/d3.min.js"></script>
+    <script>
+        const svg = d3.select("svg").style("background", "#B0AAC0");
+        
+        // Get actual width and height of svg element
+        const svgWidth = svg.node().getBoundingClientRect().width;
+        const svgHeight = svg.node().getBoundingClientRect().height;
+
+        const margin = 200;
+        const width = svgWidth - 2 * margin;
+        const height = svgHeight - 2 * margin;
+
+        // Create canvas
+        const chart = svg.append("g").attr("transform", `translate(${margin}, ${margin})`);
+
+        /************************************************************************************
+        * Data
+        ************************************************************************************/
+        // Create random data
+        const numNodes = 6, numLinks = 15;
+        const linkData = [];
+        for(let i = 0; i < numLinks; i++) {
+            let source = Math.floor(Math.random() * numNodes);
+            let target = Math.floor(Math.random() * numNodes);
+            // Target cannot be same as source
+            while (target === source) target = Math.floor(Math.random() * numNodes);
+            linkData.push({ source: source, target: target });
+        }
+        const data = { nodes: d3.range(numNodes), links: linkData };
+    
+        const xScale = d3.scalePoint().range([0, width]).domain(data.nodes);
+
+        /************************************************************************************
+        * Links
+        ************************************************************************************/
+        const links = chart.selectAll("path").data(data.links);
+        links.enter()
+            .append("path")
+            .attr("class", d => `source-${d.source}`)
+            .style("stroke", "#F0EFEF").style("stroke-width", 25).style("opacity", 0) // Hide path
+            .style("fill", "none").style("stroke-linecap", "round").style("stroke-linejoin", "round")
+            .merge(links)
+            .attr("d", d => {
+                let startX = xScale(d.source);
+                let endX = xScale(d.target);
+                let mid = (startX - endX) / 2;
+                /* 
+                 * Path commands:
+                 *      M x y
+                 *      A rx ry angle large-arc-flag sweep-flag x y
+                 * Setting the sweep-flat according to startX and endX to keep the arc upwards
+                 */
+                return `M ${startX} ${height - 30} 
+                        A ${mid} ${mid} 0 0 ${startX < endX? 1 : 0} ${endX} ${height - 30}`;
+            });
+        links.exit().remove();
+
+        /*
+         * Set stroke-dasharray and stroke-dashoffset for each path
+         * Original path:       |--------------------|
+         * Stroke dasharray:    |***|--------------------|***|  (*** is the segment)
+         * Stroke dashoffset:
+         *                                   |--------------------|
+         *      |***|--------------------|***|
+         */
+         
+        const segmentLength = width / 10; // Make segment length proportional to width
+        chart.selectAll("path")
+            .attr("stroke-dasharray", function(d) {
+                return `${segmentLength}, ${d3.select(this).node().getTotalLength()}`;
+            })
+            .attr("stroke-dashoffset", function(d) {
+                return d3.select(this).node().getTotalLength() + 2 * segmentLength;
+            })
+        
+        /************************************************************************************
+        * Clip Path 
+        ************************************************************************************/
+        const radius = 15;
+        
+        // Create a boudning rect for each node
+        const defs = svg.append("defs");
+        const clipPaths = defs.selectAll().data(data.nodes);
+        clipPaths.enter()
+            .append("clipPath")
+            .merge(clipPaths)
+            .attr("id", d => `clipPath-${d}`)
+            .append("rect")
+            .attr("x", d => xScale(d) - radius) 
+            .attr("y", height - 30 - radius) 
+            .attr("width", radius * 2) 
+            .attr("height", radius * 2) 
+        clipPaths.exit().remove();
+        
+        /************************************************************************************
+        * Nodes
+        ************************************************************************************/
+        const nodes = chart.selectAll("circle").data(data.nodes);
+        nodes.enter()
+            .append("circle")
+            .attr("r", radius).attr("cy", height - 30)
+            .style("fill", "#383845")
+            .merge(nodes)
+            .attr("cx", d => xScale(d))
+            .attr("clip-path", d => `url(#clipPath-${d})`)
+            .on("click", function(selectedNode) {
+                const duration = 1000;
+
+                // Sink the start node
+                d3.select(this).transition()
+                    .duration(duration / 5).attr("cy", height - 30 + 2 * radius);
+
+                // Create a ripple at start node
+                chart.selectAll("ellipse").data(d3.range(3)).enter()
+                    .append("ellipse")
+                    .attr("cx", xScale(selectedNode)).attr("cy", height - 30).attr("rx", 0).attr("ry", 0)
+                    .style("fill", "none").style("stroke", "#383845").style("stroke-width", d => 5 / d)
+                    .transition().duration(duration / 2).ease(d3.easeQuad)
+                    .delay(d => Math.pow(d, 2.5) * 20)
+                    .attr("rx", xScale.step() / 2).attr("ry", 20)
+                    .style("opacity", 0)
+                    .on("end", function() { d3.select(this).remove(); })
+
+                /* 
+                 * Select all paths starting from selected node ...
+                 * ... and animate segment (tween offset to segment length):
+                 *          |--------------------|
+                 *      |***|--------------------|***|
+                 */
+                chart.selectAll(`.source-${selectedNode}`)
+                    .transition()
+                    .delay(duration / 2) // Show path after the node sank
+                    .duration(0)
+                    .style("opacity", 1)
+                    .transition() 
+                    .ease(d3.easePolyInOut.exponent(0.5))
+                    .duration(duration)
+                    .attr("stroke-dashoffset", segmentLength)
+                    .on("end", function(path) {
+                        // Reset stroke offset after animation
+                        chart.selectAll(`.source-${selectedNode}`)
+                            .attr("stroke-dashoffset", function(d) {
+                                return d3.select(this).node().getTotalLength() + 2 * segmentLength;
+                            })
+                            .style("opacity", 0)
+                        
+                        // Create a ripple at end nodes
+                        chart.selectAll().data(d3.range(3)).enter()
+                            .append("ellipse")
+                            .attr("cx", xScale(path.target)).attr("cy", height - 30).attr("rx", 0).attr("ry", 0)
+                            .attr("fill", "none").attr("stroke", "#383845").attr("stroke-width", d => 5 / d)
+                            .transition().duration(duration / 2).ease(d3.easeQuad)
+                            .delay(d => Math.pow(d, 2.5) * 20)
+                            .attr("rx", xScale.step() / 2).attr("ry", 20)
+                            .style("opacity", 0)
+                            .on("end", function() { d3.select(this).remove(); })
+                    });
+                
+                // Re-surface start node 
+                d3.select(this).transition()
+                    .delay(2 * duration)
+                    .duration(duration / 5).attr("cy", height - 30);
+                
+            })
+        nodes.exit().remove(); 
+
+        
+    </script>
+</body>
+</html>
